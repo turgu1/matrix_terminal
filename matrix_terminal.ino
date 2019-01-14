@@ -28,7 +28,7 @@
 
 // ---- Development Mode ----
 
-#define debugging 1
+#define debugging 0
 
 #if debugging
   #define init_debug() { Serial.begin(9600);  }
@@ -40,7 +40,8 @@
   #define debugln(msg)
 #endif
 
-#define LED 2
+#define LED    2
+#define BUZZER 5
 
 // ---- Matrix Driver Parameters ----
 
@@ -53,11 +54,13 @@
 const uint8_t LEDMATRIX_CS_PIN = 15;
 
 // Define LED Matrix dimensions (0-n) - eg: 32x8 = 31x7
-const int LEDMATRIX_WIDTH = 23;  
-const int LEDMATRIX_HEIGHT = 7;
-const int LEDMATRIX_SEGMENTS = 3;
+
+const int LEDMATRIX_WIDTH    = 39;  
+const int LEDMATRIX_HEIGHT   = 7;
+const int LEDMATRIX_SEGMENTS = 5;
 
 // The LEDMatrixDriver class instance
+
 LEDMatrixDriver lmd(LEDMATRIX_SEGMENTS, LEDMATRIX_CS_PIN);
 
 
@@ -74,10 +77,20 @@ int  msg_len;
 
 void mqtt_callback(char* topic, byte* payload, unsigned int length) 
 {
+  int i;
+  
   if (length > 200) length = 199;
   debug("Received the following packet: ");
   debugln((char *) payload);
-  memcpy(msg, payload, length);
+
+  i = 0;
+  if (payload[0] == 7) {
+    buzz3();
+    i = 1;
+    length--;
+  }
+
+  memcpy(msg, &payload[i], length);
   msg[length] = 0;
   msg_len = length;
 }
@@ -87,10 +100,17 @@ PubSubClient mqtt(MQTT_SERVER, MQTT_PORT, mqtt_callback , wifi_client);
 
 // ---- setup() ----
 
+bool start;
+bool just_started;
+
 void setup() 
 {
   delay(200);
 
+  init_buzzer();
+  delay(10);
+  buzz1();
+  
   // init display
 
   lmd.setEnabled(true);  
@@ -99,35 +119,71 @@ void setup()
 
   lmd.clear();
   delay(10);
-
-  // init Blink LED
-  
-  init_blink();
-  
+ 
   init_debug();
   delay(10);
 
-  strcpy(msg, "Ready!");
-  msg_len = 6;  
+  start = true;
+  just_started = true; // To send Terminal Started log msg
+    
+  strcpy(msg, "Booting...");
+  msg_len = 10 ;  
+
 }
 
 // ---- loop() ----
 
 void loop() 
 {
-  // Ensure that MQTT is still connected
 
-  MQTT_connect();
-
-  if (msg_len > 0) {
-    if (displayText(msg, msg_len)) msg_len = 0;
+  if (start) {
+    if (msg_len > 0) {
+      if (displayText(msg, msg_len)) msg_len = 0;
+    }
+    else {
+      strcpy(msg, "Ready!");
+      msg_len = 6;  
+      start = false;
+    }    
   }
-  else {
-    delay(500);
+  else {      
+    // Ensure that MQTT is still connected
+  
+    MQTT_connect();
+  
+    if (msg_len > 0) {
+      if (displayText(msg, msg_len)) msg_len = 0;
+    }
+    else {
+      delay(500);
+    }
   }
+}
 
+// ---- buzzer ----
 
-//  blink(2);
+void init_buzzer()
+{
+  pinMode(BUZZER, OUTPUT);
+  digitalWrite(BUZZER, LOW);
+}
+
+void buzz1()
+{
+  digitalWrite(BUZZER, HIGH);
+  delay(200);
+  digitalWrite(BUZZER, LOW);
+  delay(200);
+}
+
+void buzz3()
+{
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(BUZZER, HIGH);
+    delay(200);
+    digitalWrite(BUZZER, LOW);
+    delay(200);
+  }
 }
 
 // ---- blink() ----
@@ -189,12 +245,8 @@ void WIFI_connect()
 
 // ---- MQTT_publish(feed, val) ----
 
-void MQTT_publish(const char * feed, float val)
+void MQTT_publish(const char * feed, char *msg)
 {
-  char msg[20];
-  
-  dtostrf(val, 4, 1, msg);
-  
   debugln(F("Publishing the following message"));
   debugln(msg);
   if (!mqtt.publish(feed, msg)) {
@@ -240,6 +292,11 @@ void MQTT_connect()
     WIFI_connect();
   }
 
+  if (just_started) {
+    just_started = false;
+    MQTT_publish("/feeds/log", "Terminal Started.");
+  }
+  
   debugln(F("Connected"));
   mqtt.subscribe(TERMINAL_FEED);
 }
